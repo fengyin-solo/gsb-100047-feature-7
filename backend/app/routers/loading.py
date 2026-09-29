@@ -5,14 +5,21 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.schemas import ActionResult, EntryPayload, PageResult
-from app.services.loading import LoadingService
+from app.schemas import (
+    ActionResult,
+    BatchActionResult,
+    EntryPayload,
+    LoadingBatchPayload,
+    PageResult,
+)
+from app.services.loading import LOADING_TYPES, LoadingService
+from app.services.shipment import STATUS_ORDER as WAYBILL_STATUSES
 
 router = APIRouter(prefix="/api/loading", tags=["装卸作业"])
 
 service = LoadingService()
 
-LIST_FIELDS = ["记录编号", "运单编号", "装卸类型", "月台编号", "开门时长", "装卸人员", "开始时间", "装卸状态"]
+LIST_FIELDS = ["记录编号", "运单编号", "装卸类型", "月台编号", "开门时长", "装卸人员", "开始时间", "运单状态", "装卸状态"]
 STATUSES = ["待装卸", "装卸中", "已完成", "已超时"]
 
 
@@ -30,6 +37,32 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.post("/batch", response_model=BatchActionResult)
+def batch_update(payload: LoadingBatchPayload) -> BatchActionResult:
+    """批量逐条更新装卸类型、开门时长、运单状态。
+
+    同一批次号重传视为断网续传：服务端只落库未完成项，已完成项跳过、不重复写入；
+    任一项校验失败，本批本次写入整体回滚。
+    """
+    ok, message, updated, skipped, entries = service.batch_update(
+        payload.batch_id, payload.items
+    )
+    return BatchActionResult(
+        ok=ok,
+        message=message,
+        batch_id=payload.batch_id,
+        updated=updated,
+        skipped=skipped,
+        entries=entries,
+    )
+
+
+@router.get("/options")
+def update_options() -> dict[str, Any]:
+    """批量更新可选项：装卸类型与运单状态枚举，前后端同源，避免页面硬编码。"""
+    return {"装卸类型": LOADING_TYPES, "运单状态": WAYBILL_STATUSES}
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
     """读取单条装卸记录明细；不存在时给出可读的错误说明。"""
@@ -37,6 +70,15 @@ def get_entry(entry_id: int) -> dict:
     if entry is None:
         raise HTTPException(status_code=404, detail=f"装卸记录 {entry_id} 不存在或已归档")
     return entry
+
+
+@router.get("/{entry_id}/waybill", response_model=dict)
+def get_entry_waybill(entry_id: int) -> dict:
+    """读取装卸记录关联的运单详情，作业明细与运单详情同源返回。"""
+    waybill, message = service.get_waybill(entry_id)
+    if waybill is None:
+        raise HTTPException(status_code=404, detail=message)
+    return waybill
 
 
 @router.post("", response_model=ActionResult)

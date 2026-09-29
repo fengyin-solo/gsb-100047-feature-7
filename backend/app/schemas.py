@@ -28,6 +28,37 @@ class EntryPayload(BaseModel):
     remark: str | None = None
 
 
+class LoadingBatchItem(BaseModel):
+    """批量更新里的单条装卸记录：逐条指定装卸类型、开门时长与运单状态。"""
+
+    model_config = {"populate_by_name": True}
+
+    entry_id: int = Field(alias="记录id")
+    loading_type: str = Field(alias="装卸类型")
+    door_minutes: int = Field(alias="开门时长")
+    waybill_status: str = Field(alias="运单状态")
+
+
+class LoadingBatchPayload(BaseModel):
+    """批量更新请求：batch_id 用于断网重传时识别同一批，服务端据此跳过已完成项。"""
+
+    model_config = {"populate_by_name": True}
+
+    batch_id: str = Field(alias="批次号", min_length=1, max_length=64)
+    items: list[LoadingBatchItem] = Field(min_length=1, max_length=100)
+
+
+class BatchActionResult(BaseModel):
+    """批量更新结果：updated 本次实际落库的记录，skipped 重传时跳过的已完成项。"""
+
+    ok: bool
+    message: str
+    batch_id: str
+    updated: list[int] = Field(default_factory=list)
+    skipped: list[int] = Field(default_factory=list)
+    entries: list[dict[str, Any]] = Field(default_factory=list)
+
+
 
 class ShipmentEntry(BaseModel):
     """发运单明细结构。"""

@@ -4,7 +4,9 @@
 """
 from __future__ import annotations
 
-from typing import Any
+import threading
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 from app.seed import SEED_ROWS
 
@@ -14,6 +16,8 @@ class Store:
         self._tables: dict[str, list[dict[str, Any]]] = {
             name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()
         }
+        # 批量操作的行级锁：保证一批记录的「校验 + 落库」不会和其他写请求交织。
+        self._lock = threading.RLock()
 
     def module_names(self) -> list[str]:
         return sorted(self._tables)
@@ -26,6 +30,29 @@ class Store:
             if int(row.get("id", 0)) == entry_id:
                 return row
         return None
+
+    def find_by(self, module: str, field: str, value: str) -> dict[str, Any] | None:
+        """按业务编号（如运单编号）定位一条记录。"""
+        for row in self.rows(module):
+            if str(row.get(field, "")) == str(value):
+                return row
+        return None
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """事务边界：进入时对全部表做深拷贝快照，块内异常则整体回滚。
+
+        内存仓库里的「落库」就是改这些 dict/list，深拷贝快照即可保证
+        「任何一项失败，本批已写结果全部回滚」；真实数据库场景换成
+        BEGIN/COMMIT/ROLLBACK 即可，service 层代码不用动。
+        """
+        with self._lock:
+            snapshot = {name: [dict(row) for row in rows] for name, rows in self._tables.items()}
+            try:
+                yield
+            except Exception:
+                self._tables = snapshot
+                raise
 
     def overview(self) -> dict[str, object]:
         modules: list[dict[str, object]] = []
