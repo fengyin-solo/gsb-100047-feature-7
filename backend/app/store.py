@@ -14,6 +14,9 @@ class Store:
         self._tables: dict[str, list[dict[str, Any]]] = {
             name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()
         }
+        # 批量作业批次表：以客户端生成的 batch_id 为幂等键，记录每项的完成状态，
+        # 网络中断后重试只续未完成项，不重复生成记录。
+        self._batches: dict[str, dict[str, Any]] = {}
 
     def module_names(self) -> list[str]:
         return sorted(self._tables)
@@ -26,6 +29,19 @@ class Store:
             if int(row.get("id", 0)) == entry_id:
                 return row
         return None
+
+    def find_by_field(self, module: str, field: str, value: Any) -> dict[str, Any] | None:
+        """按字段值查找第一条记录，用于装卸记录按运单编号反查运单。"""
+        for row in self.rows(module):
+            if row.get(field) == value:
+                return row
+        return None
+
+    def get_batch(self, batch_id: str) -> dict[str, Any] | None:
+        return self._batches.get(str(batch_id))
+
+    def upsert_batch(self, batch: dict[str, Any]) -> None:
+        self._batches[str(batch["batch_id"])] = batch
 
     def overview(self) -> dict[str, object]:
         modules: list[dict[str, object]] = []
